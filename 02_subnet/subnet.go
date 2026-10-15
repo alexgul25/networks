@@ -21,37 +21,36 @@ func (ip ipv4) String() string {
 	return netip.AddrFrom4(tmp).String()
 }
 
-func parseAddr(str string) (addr ipv4, err error) {
+func fromAddr(a netip.Addr) (ipv4, error) {
+	if !a.Is4() {
+		return 0, errors.New("not an IPv4 address")
+	}
+
+	aAs4 := a.As4()
+	return ipv4(binary.BigEndian.Uint32(aAs4[:])), nil
+}
+
+func parseAddr(str string) (ipv4, error) {
 	a, err := netip.ParseAddr(str)
 	if err != nil {
 		return 0, err
 	}
 
-	if !a.Is4() {
-		err = errors.New("unsupported ip protocol")
-		return 0, err
-	}
-
-	tmp := a.As4()
-	addr = ipv4(binary.BigEndian.Uint32(tmp[:]))
-	return addr, nil
+	return fromAddr(a)
 }
 
-func parseAddrAndPrefix(str string) (addr ipv4, prefix int, err error) {
+func parseAddrAndPrefix(str string) (ipv4, int, error) {
 	p, err := netip.ParsePrefix(str)
 	if err != nil {
 		return 0, 0, err
 	}
 
-	if !p.Addr().Is4() {
-		err = errors.New("unsupported ip protocol")
+	addr, err := fromAddr(p.Addr())
+	if err != nil {
 		return 0, 0, err
 	}
 
-	a := p.Addr().As4()
-	addr = ipv4(binary.BigEndian.Uint32(a[:]))
-	prefix = p.Bits()
-	return addr, prefix, nil
+	return addr, p.Bits(), nil
 }
 
 func runSubnet(addr ipv4, prefix int) {
