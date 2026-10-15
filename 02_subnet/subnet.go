@@ -165,8 +165,8 @@ func runRoute(w io.Writer, path string, addr ipv4) error {
 }
 
 func main() {
-	if len(os.Args) < 3 {
-		slog.Error("program must have 2 or 3 args in command line")
+	if len(os.Args) < 2 {
+		slog.Error("program must have run mode as first arg in command line: \"route\" or \"subnet\"")
 		os.Exit(1)
 	}
 
@@ -174,6 +174,11 @@ func main() {
 
 	switch args[0] {
 	case "subnet":
+		if len(args) != 2 {
+			slog.Error("program must have exactly one argument after subnet mode: <addr>/<prefix>")
+			os.Exit(1)
+		}
+
 		addr, prefix, err := parseAddrAndPrefix(args[1])
 		if err != nil {
 			slog.Error("incorrect arg in command line", slog.Any("error", err), slog.String("arg", args[1]))
@@ -182,8 +187,8 @@ func main() {
 
 		runSubnet(os.Stdout, addr, prefix)
 	case "route":
-		if len(args) < 3 {
-			slog.Error("route mode needs 3 args in command line")
+		if len(args) != 3 {
+			slog.Error("program must have exactly two arguments after route mode: <route_file> <dst_addr>")
 			os.Exit(1)
 		}
 
@@ -202,7 +207,7 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		slog.Error("unknown arg in command line", slog.String("arg", args[0]))
+		slog.Error("unknown first arg in command line (only \"route\" and \"subnet\" allowed)", slog.String("arg", args[0]))
 		os.Exit(1)
 	}
 }
