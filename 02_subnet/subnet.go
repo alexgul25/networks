@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -57,7 +58,7 @@ func maskFromPrefix(prefix int) ipv4 {
 	return ipv4(^uint32(0) << uint32(32-prefix))
 }
 
-func runSubnet(addr ipv4, prefix int) {
+func runSubnet(w io.Writer, addr ipv4, prefix int) {
 	netmask := maskFromPrefix(prefix)
 	network := addr & netmask
 	end := network | ^netmask
@@ -73,16 +74,16 @@ func runSubnet(addr ipv4, prefix int) {
 		hosts -= 2
 	}
 
-	fmt.Printf("network %s\n", network)
-	fmt.Printf("broadcast %s\n", broadcast)
-	fmt.Printf("netmask %s\n", netmask)
-	fmt.Printf("prefix %d\n", prefix)
-	fmt.Printf("first %s\n", first)
-	fmt.Printf("last %s\n", last)
-	fmt.Printf("hosts %d\n", hosts)
+	fmt.Fprintln(w, "network", network)
+	fmt.Fprintln(w, "broadcast", broadcast)
+	fmt.Fprintln(w, "netmask", netmask)
+	fmt.Fprintln(w, "prefix", prefix)
+	fmt.Fprintln(w, "first", first)
+	fmt.Fprintln(w, "last", last)
+	fmt.Fprintln(w, "hosts", hosts)
 }
 
-func runRoute(path string, addr ipv4) error {
+func runRoute(w io.Writer, path string, addr ipv4) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -91,27 +92,53 @@ func runRoute(path string, addr ipv4) error {
 
 	var bestNetInterface string
 	bestPrefix := -1
-	foundBest := false
+	bestLineNum := -1
+	conflictLineNum := -1
 
 	scanner := bufio.NewScanner(file)
+	lineNum := 0
 	for scanner.Scan() {
+		lineNum++
 		line := scanner.Text()
 		fields := strings.Fields(line)
-		if len(fields) > 0 && fields[0][0] != '#' {
-			if len(fields) != 2 {
-				return errors.New("bad line in file")
-			}
 
-			network, prefix, err := parseAddrAndPrefix(fields[0])
-			if err != nil {
-				return err
-			}
-			netmask := maskFromPrefix(prefix)
-			if network&netmask == addr&netmask && prefix > bestPrefix {
-				bestNetInterface = fields[1]
-				bestPrefix = prefix
-				foundBest = true
-			}
+		if len(fields) == 0 || fields[0][0] == '#' {
+			continue
+		}
+
+		if len(fields) != 2 {
+			slog.Warn(
+				"file line must have only 2 fields: <network>/<prefix> <interface>",
+				slog.Int("line_num", lineNum),
+				slog.String("line", line),
+			)
+			continue
+		}
+
+		network, prefix, err := parseAddrAndPrefix(fields[0])
+		if err != nil {
+			slog.Warn(
+				"failed to parse line first field",
+				slog.Any("error", err),
+				slog.Int("line_num", lineNum),
+				slog.String("line", line),
+			)
+			continue
+		}
+
+		netmask := maskFromPrefix(prefix)
+
+		if network&netmask != addr&netmask {
+			continue
+		}
+
+		if prefix > bestPrefix {
+			bestNetInterface = fields[1]
+			bestPrefix = prefix
+			bestLineNum = lineNum
+			conflictLineNum = -1
+		} else if prefix == bestPrefix && fields[1] != bestNetInterface {
+			conflictLineNum = lineNum
 		}
 	}
 
@@ -119,12 +146,20 @@ func runRoute(path string, addr ipv4) error {
 		return err
 	}
 
-	if !foundBest {
+	if bestLineNum == -1 {
 		return errUnreachable
 	}
 
-	fmt.Printf("via %s\n", bestNetInterface)
-	fmt.Printf("prefix %d\n", bestPrefix)
+	if conflictLineNum != -1 {
+		return fmt.Errorf(
+			"ambiguous route: same prefix with different interfaces: line %d and %d",
+			bestLineNum,
+			conflictLineNum,
+		)
+	}
+
+	fmt.Fprintln(w, "via", bestNetInterface)
+	fmt.Fprintln(w, "prefix", bestPrefix)
 
 	return nil
 }
@@ -145,7 +180,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		runSubnet(addr, prefix)
+		runSubnet(os.Stdout, addr, prefix)
 	case "route":
 		if len(args) < 3 {
 			slog.Error("route mode needs 3 args in command line")
@@ -158,7 +193,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		err = runRoute(args[1], addr)
+		err = runRoute(os.Stdout, args[1], addr)
 		if errors.Is(err, errUnreachable) {
 			fmt.Println("unreachable true")
 			os.Exit(1)
