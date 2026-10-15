@@ -24,6 +24,10 @@ const (
 
 	idempotencyKeyHeader = "Idempotency-Key"
 	retryAfterHeader     = "Retry-After"
+
+	// maxRetryAfter is the longest pause the client agrees to wait for.
+	// If server asks for more in Retry-After, retries stop instead of coming back earlier.
+	maxRetryAfter = 30 * time.Minute
 )
 
 type config struct {
@@ -155,20 +159,28 @@ func calculateIntervalBound(n int) int {
 	return res
 }
 
-func pauseMs(nextAttempt int, retryAfter string) int {
-	retryAfterInt, err := strconv.Atoi(retryAfter)
-	if err != nil || retryAfterInt < 0 {
-		return rand.Intn(calculateIntervalBound(nextAttempt) + 1)
+// ok is false when Retry-After asks to wait longer than maxRetryAfter
+func pause(nextAttempt int, retryAfter string) (time.Duration, bool) {
+	sec, err := strconv.ParseInt(retryAfter, 10, 64)
+	if (err != nil && !errors.Is(err, strconv.ErrRange)) || sec < 0 {
+		return time.Duration(rand.Intn(calculateIntervalBound(nextAttempt)+1)) * time.Millisecond, true
 	}
-	return retryAfterInt * 1000
+	if sec > int64(maxRetryAfter/time.Second) {
+		return 0, false
+	}
+	return time.Duration(sec) * time.Second, true
+}
+
+func printResult(success bool, attempts int) {
+	if success {
+		fmt.Printf("result success attempts %d\n", attempts)
+	} else {
+		fmt.Printf("result failure attempts %d\n", attempts)
+	}
 }
 
 func runRetry(client *http.Client, req *http.Request, maxAttempts int) bool {
-	attempt := 1
-	shouldRetryFlag := true
-	success := false
-
-	for !success && shouldRetryFlag && attempt <= maxAttempts {
+	for attempt := 1; ; attempt++ {
 		resp, err := sendRequest(client, req)
 		if err != nil {
 			fmt.Printf("attempt %d error %s\n", attempt, err)
@@ -176,23 +188,25 @@ func runRetry(client *http.Client, req *http.Request, maxAttempts int) bool {
 			fmt.Printf("attempt %d status %d\n", attempt, resp.status)
 		}
 
-		success = err == nil && resp.status >= 200 && resp.status <= 399
-		shouldRetryFlag = attempt < maxAttempts && shouldRetry(req, resp, err)
-		if shouldRetryFlag {
-			attempt++
-			ms := pauseMs(attempt, resp.retryAfter)
-			fmt.Printf("sleep_ms %d\n", ms)
-			time.Sleep(time.Duration(ms) * time.Millisecond)
+		success := err == nil && resp.status >= 200 && resp.status <= 399
+		if success || attempt == maxAttempts || !shouldRetry(req, resp, err) {
+			printResult(success, attempt)
+			return success
 		}
-	}
 
-	if success {
-		fmt.Printf("result success attempts %d\n", attempt)
-	} else {
-		fmt.Printf("result failure attempts %d\n", attempt)
-	}
+		d, ok := pause(attempt+1, resp.retryAfter)
+		if !ok {
+			slog.Warn("server asked to wait longer than client limit, giving up",
+				slog.String("retry_after", resp.retryAfter),
+				slog.Duration("limit", maxRetryAfter),
+			)
+			printResult(false, attempt)
+			return false
+		}
 
-	return success
+		fmt.Printf("sleep_ms %d\n", d.Milliseconds())
+		time.Sleep(d)
+	}
 }
 
 func main() {
