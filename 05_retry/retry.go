@@ -21,6 +21,9 @@ const (
 	baseIntervalMs = 200
 	intervalFactor = 2
 	maxIntervalMs  = 2000
+
+	idempotencyKeyHeader = "Idempotency-Key"
+	retryAfterHeader     = "Retry-After"
 )
 
 type config struct {
@@ -69,6 +72,19 @@ func parseArgs(args []string) (config, error) {
 	return cfg, nil
 }
 
+func requestFromConfig(cfg config) (*http.Request, error) {
+	req, err := http.NewRequest(cfg.method, cfg.url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if cfg.idempotencyKey != "" {
+		req.Header.Set(idempotencyKeyHeader, cfg.idempotencyKey)
+	}
+
+	return req, nil
+}
+
 func newClient() *http.Client {
 	return &http.Client{
 		Timeout:   attemptTimeout,
@@ -86,16 +102,7 @@ type response struct {
 
 // sendRequest makes one attempt. Error means there is no response from server:
 // connection refused, connection reset or timeout.
-func sendRequest(client *http.Client, cfg config) (response, error) {
-	req, err := http.NewRequest(cfg.method, cfg.url, nil)
-	if err != nil {
-		return response{}, err
-	}
-
-	if cfg.idempotencyKey != "" {
-		req.Header.Set("Idempotency-Key", cfg.idempotencyKey)
-	}
-
+func sendRequest(client *http.Client, req *http.Request) (response, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		return response{}, err
@@ -108,12 +115,12 @@ func sendRequest(client *http.Client, cfg config) (response, error) {
 
 	return response{
 		status:     resp.StatusCode,
-		retryAfter: resp.Header.Get("Retry-After"),
+		retryAfter: resp.Header.Get(retryAfterHeader),
 	}, nil
 }
 
-func shouldRetry(cfg config, resp response, err error) bool {
-	if cfg.method == http.MethodPost && cfg.idempotencyKey == "" {
+func shouldRetry(req *http.Request, resp response, err error) bool {
+	if req.Method == http.MethodPost && req.Header.Get(idempotencyKeyHeader) == "" {
 		return false
 	}
 
@@ -148,13 +155,13 @@ func pauseMs(nextAttempt int, retryAfter string) int {
 	return retryAfterInt * 1000
 }
 
-func runRetry(client *http.Client, cfg config) bool {
+func runRetry(client *http.Client, req *http.Request, maxAttempts int) bool {
 	attempt := 1
 	shouldRetryFlag := true
 	success := false
 
-	for !success && shouldRetryFlag && attempt <= cfg.maxAttempts {
-		resp, err := sendRequest(client, cfg)
+	for !success && shouldRetryFlag && attempt <= maxAttempts {
+		resp, err := sendRequest(client, req)
 		if err != nil {
 			fmt.Printf("attempt %d error %s\n", attempt, err)
 		} else {
@@ -162,7 +169,7 @@ func runRetry(client *http.Client, cfg config) bool {
 		}
 
 		success = err == nil && resp.status >= 200 && resp.status <= 399
-		shouldRetryFlag = attempt < cfg.maxAttempts && shouldRetry(cfg, resp, err)
+		shouldRetryFlag = attempt < maxAttempts && shouldRetry(req, resp, err)
 		if shouldRetryFlag {
 			attempt++
 			ms := pauseMs(attempt, resp.retryAfter)
@@ -187,7 +194,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if !runRetry(newClient(), cfg) {
+	req, err := requestFromConfig(cfg)
+	if err != nil {
+		slog.Error("failed to build request from args", slog.Any("error", err))
+		os.Exit(1)
+	}
+
+	if !runRetry(newClient(), req, cfg.maxAttempts) {
 		os.Exit(1)
 	}
 }
