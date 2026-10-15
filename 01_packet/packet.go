@@ -297,30 +297,27 @@ func joinFlags(flags []string) string {
 	return strings.Join(flags, ",")
 }
 
-func main() {
-	frame, err := readFrame(os.Stdin)
+func run(r io.Reader, w io.Writer) error {
+	frame, err := readFrame(r)
 	if err != nil {
-		slog.Error("failed to read frame", slog.Any("error", err))
-		os.Exit(1)
+		return err
 	}
 
 	eth, err := parseEthernet(frame)
 	if err != nil {
-		slog.Error("failed to parse ethernet frame", slog.Any("error", err))
-		os.Exit(1)
+		return err
 	}
-	eth.print(os.Stdout)
+	eth.print(w)
 
 	if eth.ethertype != etherTypeIPv4 {
-		return
+		return nil
 	}
 
 	ip, err := parseIPv4(eth.payload)
 	if err != nil {
-		slog.Error("failed to parse IPv4 packet", slog.Any("error", err))
-		os.Exit(1)
+		return err
 	}
-	ip.print(os.Stdout)
+	ip.print(w)
 
 	payload := ip.payload
 
@@ -329,21 +326,28 @@ func main() {
 		case protocolTCP:
 			tcp, err := parseTCP(ip.payload)
 			if err != nil {
-				slog.Error("failed to parse TCP segment", slog.Any("error", err))
-				os.Exit(1)
+				return err
 			}
-			tcp.print(os.Stdout)
+			tcp.print(w)
 			payload = tcp.payload
 		case protocolUDP:
 			udp, err := parseUDP(ip.payload)
 			if err != nil {
-				slog.Error("failed to parse UDP datagram", slog.Any("error", err))
-				os.Exit(1)
+				return err
 			}
-			udp.print(os.Stdout)
+			udp.print(w)
 			payload = udp.payload
 		}
 	}
 
-	fmt.Println("payload.length", len(payload))
+	fmt.Fprintln(w, "payload.length", len(payload))
+
+	return nil
+}
+
+func main() {
+	if err := run(os.Stdin, os.Stdout); err != nil {
+		slog.Error("failed to parse packet", slog.Any("error", err))
+		os.Exit(1)
+	}
 }
