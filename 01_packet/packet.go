@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"unicode"
@@ -50,8 +51,8 @@ func readFrame(r io.Reader) ([]byte, error) {
 }
 
 type EthernetFrame struct {
-	dst       string
-	src       string
+	dst       net.HardwareAddr
+	src       net.HardwareAddr
 	ethertype uint16
 	payload   []byte
 }
@@ -63,8 +64,8 @@ func parseEthernet(frame []byte) (*EthernetFrame, error) {
 	}
 
 	return &EthernetFrame{
-		dst:       net.HardwareAddr(frame[:6]).String(),
-		src:       net.HardwareAddr(frame[6:12]).String(),
+		dst:       net.HardwareAddr(frame[:6]),
+		src:       net.HardwareAddr(frame[6:12]),
 		ethertype: binary.BigEndian.Uint16(frame[12:14]),
 		payload:   frame[ethernetHeaderLen:],
 	}, nil
@@ -81,15 +82,21 @@ type IPv4Packet struct {
 	ihlBytes      uint8
 	totalLength   uint16
 	id            uint16
-	flags         string
-	fragOffset    uint32
+	flags         uint8 // | 0 | 0 | 0 | 0 | 0 | R | DF | MF |
+	fragOffset    uint16
 	ttl           uint8
 	protocol      uint8
-	src           string
-	dst           string
+	src           netip.Addr
+	dst           netip.Addr
 	checksumValid bool
 	payload       []byte
 }
+
+const (
+	ipFlagReserved = 0b100
+	ipFlagDF       = 0b010
+	ipFlagMF       = 0b001
+)
 
 func parseIPv4(packet []byte) (*IPv4Packet, error) {
 	if len(packet) < ipv4MinHeaderLen {
@@ -121,12 +128,9 @@ func parseIPv4(packet []byte) (*IPv4Packet, error) {
 
 	flagsAndOffset := binary.BigEndian.Uint16(packet[6:8])
 
-	var flags []string
-	if flagsAndOffset&0x4000 != 0 {
-		flags = append(flags, "DF")
-	}
-	if flagsAndOffset&0x2000 != 0 {
-		flags = append(flags, "MF")
+	flags := uint8(flagsAndOffset >> 13)
+	if flags&ipFlagReserved != 0 {
+		slog.Warn("reserved IPv4 flag bit is set")
 	}
 
 	header := packet[:ihlBytes]
@@ -136,12 +140,12 @@ func parseIPv4(packet []byte) (*IPv4Packet, error) {
 		ihlBytes:      uint8(ihlBytes),
 		totalLength:   totalLength,
 		id:            binary.BigEndian.Uint16(packet[4:6]),
-		flags:         joinFlags(flags),
-		fragOffset:    uint32(flagsAndOffset&0x1fff) * 8,
+		flags:         flags,
+		fragOffset:    uint16(flagsAndOffset&0x1fff) * 8,
 		ttl:           packet[8],
 		protocol:      packet[9],
-		src:           net.IP(packet[12:16]).String(),
-		dst:           net.IP(packet[16:20]).String(),
+		src:           netip.AddrFrom4([4]byte(packet[12:16])),
+		dst:           netip.AddrFrom4([4]byte(packet[16:20])),
 		checksumValid: ipv4Checksum(header) == binary.BigEndian.Uint16(packet[10:12]),
 		payload:       packet[ihlBytes:totalLength],
 	}, nil
@@ -170,7 +174,14 @@ func (p *IPv4Packet) print(w io.Writer) {
 	fmt.Fprintln(w, "ip.ihl_bytes", p.ihlBytes)
 	fmt.Fprintln(w, "ip.total_length", p.totalLength)
 	fmt.Fprintf(w, "ip.id 0x%04x\n", p.id)
-	fmt.Fprintln(w, "ip.flags", p.flags)
+	var strFlags []string
+	if p.flags&ipFlagDF != 0 {
+		strFlags = append(strFlags, "DF")
+	}
+	if p.flags&ipFlagMF != 0 {
+		strFlags = append(strFlags, "MF")
+	}
+	fmt.Fprintln(w, "ip.flags", joinFlags(strFlags))
 	fmt.Fprintln(w, "ip.frag_offset", p.fragOffset)
 	fmt.Fprintln(w, "ip.ttl", p.ttl)
 	fmt.Fprintln(w, "ip.protocol", p.protocol)
@@ -185,7 +196,7 @@ type TCPSegment struct {
 	seq             uint32
 	ack             uint32
 	dataOffsetBytes uint8
-	flags           string
+	flags           uint8
 	window          uint16
 	payload         []byte
 }
@@ -204,26 +215,19 @@ func parseTCP(segment []byte) (*TCPSegment, error) {
 		return nil, fmt.Errorf("TCP header length %d exceeds segment size %d", dataOffsetBytes, len(segment))
 	}
 
-	flagNames := []string{"FIN", "SYN", "RST", "PSH", "ACK", "URG"}
-
-	var flags []string
-	for bit, name := range flagNames {
-		if segment[13]&(1<<bit) != 0 {
-			flags = append(flags, name)
-		}
-	}
-
 	return &TCPSegment{
 		srcPort:         binary.BigEndian.Uint16(segment[0:2]),
 		dstPort:         binary.BigEndian.Uint16(segment[2:4]),
 		seq:             binary.BigEndian.Uint32(segment[4:8]),
 		ack:             binary.BigEndian.Uint32(segment[8:12]),
 		dataOffsetBytes: uint8(dataOffsetBytes),
-		flags:           joinFlags(flags),
+		flags:           segment[13],
 		window:          binary.BigEndian.Uint16(segment[14:16]),
 		payload:         segment[dataOffsetBytes:],
 	}, nil
 }
+
+var tcpFlagNames = []string{"FIN", "SYN", "RST", "PSH", "ACK", "URG"}
 
 func (s *TCPSegment) print(w io.Writer) {
 	fmt.Fprintln(w, "tcp.src_port", s.srcPort)
@@ -231,7 +235,13 @@ func (s *TCPSegment) print(w io.Writer) {
 	fmt.Fprintln(w, "tcp.seq", s.seq)
 	fmt.Fprintln(w, "tcp.ack", s.ack)
 	fmt.Fprintln(w, "tcp.data_offset_bytes", s.dataOffsetBytes)
-	fmt.Fprintln(w, "tcp.flags", s.flags)
+	var strFlags []string
+	for bit, name := range tcpFlagNames {
+		if s.flags&(1<<bit) != 0 {
+			strFlags = append(strFlags, name)
+		}
+	}
+	fmt.Fprintln(w, "tcp.flags", joinFlags(strFlags))
 	fmt.Fprintln(w, "tcp.window", s.window)
 }
 
