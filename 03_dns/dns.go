@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -326,6 +327,9 @@ func exchange(conn *net.UDPConn, q question) (response, error) {
 		n, err := conn.Read(buf)
 		if errors.Is(err, os.ErrDeadlineExceeded) {
 			return response{}, errTimeout
+		}
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			continue
 		}
 		if err != nil {
 			return response{}, fmt.Errorf("receive response: %w", err)
