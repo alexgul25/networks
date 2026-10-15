@@ -119,8 +119,18 @@ func sendRequest(client *http.Client, req *http.Request) (response, error) {
 	}, nil
 }
 
+func isIdempotent(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPut,
+		http.MethodDelete, http.MethodOptions, http.MethodTrace:
+		return true
+	default:
+		return false
+	}
+}
+
 func shouldRetry(req *http.Request, resp response, err error) bool {
-	if req.Method == http.MethodPost && req.Header.Get(idempotencyKeyHeader) == "" {
+	if !isIdempotent(req.Method) && req.Header.Get(idempotencyKeyHeader) == "" {
 		return false
 	}
 
