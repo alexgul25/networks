@@ -262,11 +262,25 @@ func parseUDP(datagram []byte) (*UDPDatagram, error) {
 			len(datagram), udpHeaderLen)
 	}
 
+	length := binary.BigEndian.Uint16(datagram[4:6])
+
+	end := len(datagram)
+	if length < udpHeaderLen {
+		slog.Warn("udp.length is shorter than udp header size", slog.Int("length", int(length)))
+	} else if int(length) != len(datagram) {
+		slog.Warn(
+			"udp.length and datagram size are different",
+			slog.Int("length", int(length)),
+			slog.Int("datagram_size", len(datagram)),
+		)
+		end = min(int(length), len(datagram))
+	}
+
 	return &UDPDatagram{
 		srcPort: binary.BigEndian.Uint16(datagram[0:2]),
 		dstPort: binary.BigEndian.Uint16(datagram[2:4]),
-		length:  binary.BigEndian.Uint16(datagram[4:6]),
-		payload: datagram[udpHeaderLen:],
+		length:  length,
+		payload: datagram[udpHeaderLen:end],
 	}, nil
 }
 
