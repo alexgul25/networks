@@ -129,20 +129,6 @@ func shouldRetry(cfg config, resp response, err error) bool {
 	}
 }
 
-func powInt(x, n int) int {
-	if n == 0 {
-		return 1
-	}
-	if n == 1 {
-		return x
-	}
-	y := powInt(x, n/2)
-	if n%2 == 0 {
-		return y * y
-	}
-	return x * y * y
-}
-
 func calculateIntervalBound(n int) int {
 	res := baseIntervalMs
 	for range n - 1 {
