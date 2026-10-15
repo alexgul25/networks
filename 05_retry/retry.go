@@ -67,8 +67,6 @@ func parseArgs(args []string) (config, error) {
 		return config{}, fmt.Errorf("url must look like http://host:port/path, got %q", cfg.url)
 	}
 
-	cfg.method = strings.ToUpper(cfg.method)
-
 	return cfg, nil
 }
 
