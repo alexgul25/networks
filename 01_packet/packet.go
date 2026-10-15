@@ -123,7 +123,11 @@ func parseIPv4(packet []byte) (*IPv4Packet, error) {
 		return nil, fmt.Errorf("IPv4 total length %d is less than header length %d", totalLength, ihlBytes)
 	}
 	if int(totalLength) > len(packet) {
-		return nil, fmt.Errorf("IPv4 total length %d exceeds packet size %d", totalLength, len(packet))
+		slog.Warn(
+			"ip.total_length is larger than packet size",
+			slog.Int("total_length", int(totalLength)),
+			slog.Int("packet_size", len(packet)),
+		)
 	}
 
 	flagsAndOffset := binary.BigEndian.Uint16(packet[6:8])
@@ -147,7 +151,7 @@ func parseIPv4(packet []byte) (*IPv4Packet, error) {
 		src:           netip.AddrFrom4([4]byte(packet[12:16])),
 		dst:           netip.AddrFrom4([4]byte(packet[16:20])),
 		checksumValid: ipv4Checksum(header) == binary.BigEndian.Uint16(packet[10:12]),
-		payload:       packet[ihlBytes:totalLength],
+		payload:       packet[ihlBytes:min(int(totalLength), len(packet))],
 	}, nil
 }
 
