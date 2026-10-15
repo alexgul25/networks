@@ -21,7 +21,7 @@ func (ip ipv4) String() string {
 	return netip.AddrFrom4(tmp).String()
 }
 
-func fromAddr(a netip.Addr) (ipv4, error) {
+func ipv4FromAddr(a netip.Addr) (ipv4, error) {
 	if !a.Is4() {
 		return 0, errors.New("not an IPv4 address")
 	}
@@ -36,7 +36,7 @@ func parseAddr(str string) (ipv4, error) {
 		return 0, err
 	}
 
-	return fromAddr(a)
+	return ipv4FromAddr(a)
 }
 
 func parseAddrAndPrefix(str string) (ipv4, int, error) {
@@ -45,7 +45,7 @@ func parseAddrAndPrefix(str string) (ipv4, int, error) {
 		return 0, 0, err
 	}
 
-	addr, err := fromAddr(p.Addr())
+	addr, err := ipv4FromAddr(p.Addr())
 	if err != nil {
 		return 0, 0, err
 	}
@@ -53,8 +53,12 @@ func parseAddrAndPrefix(str string) (ipv4, int, error) {
 	return addr, p.Bits(), nil
 }
 
+func maskFromPrefix(prefix int) ipv4 {
+	return ipv4(^uint32(0) << uint32(32-prefix))
+}
+
 func runSubnet(addr ipv4, prefix int) {
-	netmask := ipv4(^uint32(0) << uint32(32-prefix))
+	netmask := maskFromPrefix(prefix)
 	network := addr & netmask
 	end := network | ^netmask
 	broadcast := "none"
@@ -102,7 +106,7 @@ func runRoute(path string, addr ipv4) error {
 			if err != nil {
 				return err
 			}
-			netmask := ipv4(^uint32(0) << uint32(32-prefix))
+			netmask := maskFromPrefix(prefix)
 			if network&netmask == addr&netmask && prefix > bestPrefix {
 				bestNetInterface = fields[1]
 				bestPrefix = prefix
