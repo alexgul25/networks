@@ -53,13 +53,12 @@ var typeCodes = map[string]uint16{
 	"AAAA":  typeAAAA,
 }
 
-var typeNames = map[uint16]string{
-	typeA:     "A",
-	typeNS:    "NS",
-	typeCNAME: "CNAME",
-	typeMX:    "MX",
-	typeTXT:   "TXT",
-	typeAAAA:  "AAAA",
+var typeNames = make(map[uint16]string, len(typeCodes))
+
+func init() {
+	for name, code := range typeCodes {
+		typeNames[code] = name
+	}
 }
 
 var rcodeNames = map[int]string{
