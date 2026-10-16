@@ -23,6 +23,7 @@ const (
 	maxLabelLen     = 63
 	maxNameLen      = 255
 	maxPointerJumps = 128
+	maxTTL          = 1<<31 - 1 // RFC 2181: larger ttl is treated as zero
 
 	responseTimeout = 5 * time.Second
 
@@ -309,7 +310,12 @@ func parseResponse(msg []byte, q question) (response, error) {
 		}
 
 		rtype := binary.BigEndian.Uint16(msg[end : end+2])
+
 		ttl := binary.BigEndian.Uint32(msg[end+4 : end+8])
+		if ttl > maxTTL {
+			ttl = 0
+		}
+
 		rdLength := int(binary.BigEndian.Uint16(msg[end+8 : end+10]))
 
 		dataStart := end + recordHeaderLen
