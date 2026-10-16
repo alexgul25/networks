@@ -229,6 +229,7 @@ func formatRecordData(msg []byte, rtype uint16, start int, end int) (string, err
 		}
 		return netip.AddrFrom16([16]byte(rdata)).String(), nil
 	case typeCNAME, typeNS:
+		// msg[:end] does not let the name run into the next record
 		name, _, err := readName(msg[:end], start)
 		return name, err
 	case typeMX:
@@ -329,6 +330,7 @@ func exchange(conn *net.UDPConn, q question) (response, error) {
 			return response{}, errTimeout
 		}
 		if errors.Is(err, syscall.ECONNREFUSED) {
+			// ICMP port unreachable: nobody answers, wait for the deadline
 			continue
 		}
 		if err != nil {
@@ -348,7 +350,8 @@ func exchange(conn *net.UDPConn, q question) (response, error) {
 
 		resp, err := parseResponse(msg)
 		if err != nil {
-			return response{}, fmt.Errorf("parse response: %w", err)
+			slog.Warn("skip malformed response", slog.Any("error", err))
+			continue
 		}
 		return resp, nil
 	}
