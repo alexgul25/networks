@@ -293,20 +293,27 @@ func parseResponse(msg []byte) (response, error) {
 		if dataEnd > len(msg) {
 			return response{}, fmt.Errorf("answer %d: record data is truncated", i+1)
 		}
+		offset = dataEnd
 
 		if i == 0 || ttl < resp.minTTL {
 			resp.minTTL = ttl
 		}
 
-		if typeName, ok := typeNames[rtype]; ok {
-			value, err := formatRecordData(msg, rtype, dataStart, dataEnd)
-			if err != nil {
-				return response{}, fmt.Errorf("answer %d: %w", i+1, err)
-			}
-			resp.answers = append(resp.answers, answer{typeName: typeName, value: value, ttl: ttl})
+		typeName, ok := typeNames[rtype]
+		if !ok {
+			continue
 		}
 
-		offset = dataEnd
+		value, err := formatRecordData(msg, rtype, dataStart, dataEnd)
+		if err != nil {
+			slog.Warn("skip malformed record",
+				slog.Int("answer", i+1),
+				slog.String("type", typeName),
+				slog.Any("error", err),
+			)
+			continue
+		}
+		resp.answers = append(resp.answers, answer{typeName: typeName, value: value, ttl: ttl})
 	}
 
 	return resp, nil
