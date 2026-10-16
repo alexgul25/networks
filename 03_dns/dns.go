@@ -177,6 +177,7 @@ func buildQuery(id uint16, q question) []byte {
 
 func readName(msg []byte, offset int) (string, int, error) {
 	var labels []string
+	nameLen := 1 // terminating zero byte
 	end := -1
 	jumps := 0
 
@@ -207,6 +208,10 @@ func readName(msg []byte, offset int) (string, int, error) {
 			}
 			return strings.Join(labels, ".") + ".", end, nil
 		default:
+			nameLen += 1 + length
+			if nameLen > maxNameLen {
+				return "", 0, fmt.Errorf("name is longer than %d bytes", maxNameLen)
+			}
 			offset++
 			if offset+length > len(msg) {
 				return "", 0, errors.New("label runs past the end of message")
