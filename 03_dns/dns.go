@@ -2,11 +2,11 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"net"
 	"net/netip"
 	"os"
@@ -320,7 +320,9 @@ func parseResponse(msg []byte) (response, error) {
 }
 
 func exchange(conn *net.UDPConn, q question) (response, error) {
-	id := uint16(rand.Intn(1 << 16))
+	var idBytes [2]byte
+	rand.Read(idBytes[:])
+	id := binary.BigEndian.Uint16(idBytes[:])
 
 	if _, err := conn.Write(buildQuery(id, q)); err != nil {
 		return response{}, fmt.Errorf("send query: %w", err)
