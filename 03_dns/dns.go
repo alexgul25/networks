@@ -363,7 +363,7 @@ func parseResponse(msg []byte, q question) (response, error) {
 	return resp, nil
 }
 
-func exchange(conn *net.UDPConn, q question) (response, error) {
+func exchange(conn *net.UDPConn, buf []byte, q question) (response, error) {
 	var idBytes [2]byte
 	rand.Read(idBytes[:])
 	id := binary.BigEndian.Uint16(idBytes[:])
@@ -376,7 +376,6 @@ func exchange(conn *net.UDPConn, q question) (response, error) {
 		return response{}, fmt.Errorf("set deadline: %w", err)
 	}
 
-	buf := make([]byte, maxMessageLen)
 	for {
 		n, err := conn.Read(buf)
 		if errors.Is(err, os.ErrDeadlineExceeded) {
@@ -446,6 +445,7 @@ func main() {
 	defer conn.Close()
 
 	cache := make(map[cacheKey]cacheEntry)
+	buf := make([]byte, maxMessageLen)
 
 	lineNum := 0
 	scanner := bufio.NewScanner(os.Stdin)
@@ -475,7 +475,7 @@ func main() {
 			delete(cache, key)
 		}
 
-		resp, err := exchange(conn, q)
+		resp, err := exchange(conn, buf, q)
 		if errors.Is(err, errTimeout) {
 			printBlock(q, "TIMEOUT", nil)
 			os.Exit(1)
