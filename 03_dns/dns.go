@@ -261,23 +261,42 @@ func formatRecordData(msg []byte, rtype uint16, start int, end int) (string, err
 	}
 }
 
-func parseResponse(msg []byte) (response, error) {
-	flags := binary.BigEndian.Uint16(msg[2:4])
+func checkQuestion(msg []byte, q question) (int, error) {
 	qdcount := int(binary.BigEndian.Uint16(msg[4:6]))
+	if qdcount != 1 {
+		return 0, fmt.Errorf("response must repeat 1 question, got %d", qdcount)
+	}
+
+	name, end, err := readName(msg, headerLen)
+	if err != nil {
+		return 0, fmt.Errorf("question: %w", err)
+	}
+	if end+4 > len(msg) {
+		return 0, errors.New("question type and class are truncated")
+	}
+
+	qtype := binary.BigEndian.Uint16(msg[end : end+2])
+	qclass := binary.BigEndian.Uint16(msg[end+2 : end+4])
+	sameName := strings.EqualFold(name, strings.TrimSuffix(q.name, ".")+".")
+	if !sameName || qtype != q.qtype || qclass != classIN {
+		return 0, fmt.Errorf("question %s type %d class %d does not match the query", name, qtype, qclass)
+	}
+
+	return end + 4, nil
+}
+
+func parseResponse(msg []byte, q question) (response, error) {
+	flags := binary.BigEndian.Uint16(msg[2:4])
 	ancount := int(binary.BigEndian.Uint16(msg[6:8]))
+
+	offset, err := checkQuestion(msg, q)
+	if err != nil {
+		return response{}, err
+	}
 
 	resp := response{
 		rcode:     int(flags & rcodeMask),
 		truncated: flags&flagTruncated != 0,
-	}
-	offset := headerLen
-
-	for range qdcount {
-		_, end, err := readName(msg, offset)
-		if err != nil {
-			return response{}, fmt.Errorf("question: %w", err)
-		}
-		offset = end + 4
 	}
 
 	for i := range ancount {
@@ -362,7 +381,7 @@ func exchange(conn *net.UDPConn, q question) (response, error) {
 			continue
 		}
 
-		resp, err := parseResponse(msg)
+		resp, err := parseResponse(msg, q)
 		if err != nil {
 			slog.Warn("skip malformed response", slog.Any("error", err))
 			continue
