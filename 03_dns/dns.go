@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -416,31 +417,28 @@ func rcodeName(rcode int) string {
 	return fmt.Sprintf("RCODE%d", rcode)
 }
 
-func printBlock(q question, status string, answers []answer) {
-	fmt.Printf("query %s %s\n", q.name, q.typeName)
-	fmt.Printf("status %s\n", status)
+func printBlock(w io.Writer, q question, status string, answers []answer) {
+	fmt.Fprintf(w, "query %s %s\n", q.name, q.typeName)
+	fmt.Fprintf(w, "status %s\n", status)
 	for _, a := range answers {
-		fmt.Printf("answer %s %s %d\n", a.typeName, a.value, a.ttl)
+		fmt.Fprintf(w, "answer %s %s %d\n", a.typeName, a.value, a.ttl)
 	}
-	fmt.Println("end")
+	fmt.Fprintln(w, "end")
 }
 
-func main() {
-	if len(os.Args) != 3 {
-		slog.Error("program must have 2 args in command line: <server address> <port>")
-		os.Exit(1)
+func run(args []string, r io.Reader, w io.Writer) error {
+	if len(args) != 2 {
+		return errors.New("program must have 2 args in command line: <server address> <port>")
 	}
 
-	server, err := parseServer(os.Args[1], os.Args[2])
+	server, err := parseServer(args[0], args[1])
 	if err != nil {
-		slog.Error("incorrect args in command line", slog.Any("error", err))
-		os.Exit(1)
+		return fmt.Errorf("incorrect args in command line: %w", err)
 	}
 
 	conn, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(server))
 	if err != nil {
-		slog.Error("failed to open udp socket", slog.Any("error", err))
-		os.Exit(1)
+		return fmt.Errorf("open udp socket: %w", err)
 	}
 	defer conn.Close()
 
@@ -448,7 +446,7 @@ func main() {
 	buf := make([]byte, maxMessageLen)
 
 	lineNum := 0
-	scanner := bufio.NewScanner(os.Stdin)
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Text()
@@ -469,7 +467,7 @@ func main() {
 		key := newCacheKey(q)
 		if entry, ok := cache[key]; ok {
 			if time.Now().Before(entry.expires) {
-				printBlock(q, rcodeName(rcodeNoError), entry.answers)
+				printBlock(w, q, rcodeName(rcodeNoError), entry.answers)
 				continue
 			}
 			delete(cache, key)
@@ -477,12 +475,10 @@ func main() {
 
 		resp, err := exchange(conn, buf, q)
 		if errors.Is(err, errTimeout) {
-			printBlock(q, "TIMEOUT", nil)
-			os.Exit(1)
+			printBlock(w, q, "TIMEOUT", nil)
 		}
 		if err != nil {
-			slog.Error("failed to resolve", slog.Any("error", err), slog.String("query", line))
-			os.Exit(1)
+			return fmt.Errorf("resolve %q: %w", line, err)
 		}
 
 		if resp.truncated {
@@ -494,11 +490,19 @@ func main() {
 			}
 		}
 
-		printBlock(q, rcodeName(resp.rcode), resp.answers)
+		printBlock(w, q, rcodeName(resp.rcode), resp.answers)
 	}
 
 	if err := scanner.Err(); err != nil {
-		slog.Error("failed to read input", slog.Any("error", err))
+		return fmt.Errorf("read input: %w", err)
+	}
+
+	return nil
+}
+
+func main() {
+	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
+		slog.Error("dns client stopped", slog.Any("error", err))
 		os.Exit(1)
 	}
 }
