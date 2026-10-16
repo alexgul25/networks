@@ -28,6 +28,7 @@ const (
 
 	classIN       = 1
 	flagResponse  = 0x8000 // QR bit
+	flagTruncated = 0x0200 // TC bit
 	flagRecursion = 0x0100 // RD bit
 	rcodeMask     = 0x000F
 	rcodeNoError  = 0
@@ -82,9 +83,10 @@ type answer struct {
 }
 
 type response struct {
-	rcode   int
-	answers []answer
-	minTTL  uint32
+	rcode     int
+	truncated bool
+	answers   []answer
+	minTTL    uint32
 }
 
 type cacheKey struct {
@@ -264,7 +266,10 @@ func parseResponse(msg []byte) (response, error) {
 	qdcount := int(binary.BigEndian.Uint16(msg[4:6]))
 	ancount := int(binary.BigEndian.Uint16(msg[6:8]))
 
-	resp := response{rcode: int(flags & rcodeMask)}
+	resp := response{
+		rcode:     int(flags & rcodeMask),
+		truncated: flags&flagTruncated != 0,
+	}
 	offset := headerLen
 
 	for range qdcount {
@@ -441,7 +446,9 @@ func main() {
 			os.Exit(1)
 		}
 
-		if resp.rcode == rcodeNoError && len(resp.answers) > 0 && resp.minTTL > 0 {
+		if resp.truncated {
+			slog.Warn("truncated response is not cached, answers may be incomplete", slog.String("query", line))
+		} else if resp.rcode == rcodeNoError && len(resp.answers) > 0 && resp.minTTL > 0 {
 			cache[key] = cacheEntry{
 				answers: resp.answers,
 				expires: time.Now().Add(time.Duration(resp.minTTL) * time.Second),
