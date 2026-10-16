@@ -401,8 +401,10 @@ func main() {
 
 	cache := make(map[cacheKey]cacheEntry)
 
+	lineNum := 0
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
+		lineNum++
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -410,8 +412,12 @@ func main() {
 
 		q, err := parseQuestion(line)
 		if err != nil {
-			slog.Error("incorrect line in input", slog.Any("error", err))
-			os.Exit(1)
+			slog.Warn("skip incorrect line in input",
+				slog.Int("line_num", lineNum),
+				slog.String("line", line),
+				slog.Any("error", err),
+			)
+			continue
 		}
 
 		key := newCacheKey(q)
