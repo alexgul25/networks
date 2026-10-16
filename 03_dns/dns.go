@@ -217,6 +217,18 @@ func readName(msg []byte, offset int) (string, int, error) {
 	}
 }
 
+func readDataName(msg []byte, start int, end int) (string, error) {
+	// msg[:end] does not let the name run into the next record
+	name, nameEnd, err := readName(msg[:end], start)
+	if err != nil {
+		return "", err
+	}
+	if nameEnd != end {
+		return "", fmt.Errorf("unexpected bytes after name in record data: %d", end-nameEnd)
+	}
+	return name, nil
+}
+
 func formatRecordData(msg []byte, rtype uint16, start int, end int) (string, error) {
 	rdata := msg[start:end]
 
@@ -232,15 +244,13 @@ func formatRecordData(msg []byte, rtype uint16, start int, end int) (string, err
 		}
 		return netip.AddrFrom16([16]byte(rdata)).String(), nil
 	case typeCNAME, typeNS:
-		// msg[:end] does not let the name run into the next record
-		name, _, err := readName(msg[:end], start)
-		return name, err
+		return readDataName(msg, start, end)
 	case typeMX:
 		if len(rdata) < 3 {
 			return "", fmt.Errorf("MX data is too short: %d bytes", len(rdata))
 		}
 		preference := binary.BigEndian.Uint16(rdata[0:2])
-		host, _, err := readName(msg[:end], start+2)
+		host, err := readDataName(msg, start+2, end)
 		if err != nil {
 			return "", err
 		}
